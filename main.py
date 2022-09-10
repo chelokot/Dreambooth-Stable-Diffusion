@@ -1,44 +1,29 @@
-import argparse, os, sys, datetime, glob, importlib, csv
+import argparse
+import csv
+import datetime
+import glob
+import importlib
 import numpy as np
+import os
+import pytorch_lightning as pl
+import sys
 import time
 import torch
-
 import torchvision
-import pytorch_lightning as pl
-
-from packaging import version
-from omegaconf import OmegaConf
-from torch.utils.data import random_split, DataLoader, Dataset, Subset
-from functools import partial
 from PIL import Image
-
+from functools import partial
+from omegaconf import OmegaConf
+from packaging import version
 from pytorch_lightning import seed_everything
-from pytorch_lightning.trainer import Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint, Callback, LearningRateMonitor
-from pytorch_lightning.utilities.distributed import rank_zero_only
+from pytorch_lightning.trainer import Trainer
 from pytorch_lightning.utilities import rank_zero_info
+from pytorch_lightning.utilities.distributed import rank_zero_only
+from torch.utils.data import random_split, DataLoader, Dataset, Subset
 
 from ldm.data.base import Txt2ImgIterableBaseDataset
 from ldm.util import instantiate_from_config
 
-def load_model_from_config(config, ckpt, verbose=False):
-    print(f"Loading model from {ckpt}")
-    pl_sd = torch.load(ckpt, map_location="cpu")
-    sd = pl_sd["state_dict"]
-    config.model.params.ckpt_path = ckpt
-    model = instantiate_from_config(config.model)
-    m, u = model.load_state_dict(sd, strict=False)
-    if len(m) > 0 and verbose:
-        print("missing keys:")
-        print(m)
-    if len(u) > 0 and verbose:
-        print("unexpected keys:")
-        print(u)
-
-    model.half().cpu()
-    #model.cuda()
-    #model.float()
-    return model
 
 def get_parser(**parser_kwargs):
     def str2bool(v):
@@ -78,7 +63,7 @@ def get_parser(**parser_kwargs):
         help="paths to base configs. Loaded from left-to-right. "
              "Parameters can be overwritten or added with command-line options of the form `--key value`.",
         default=list(),
-    ) 
+    )
     parser.add_argument(
         "-t",
         "--train",
@@ -135,48 +120,10 @@ def get_parser(**parser_kwargs):
         "--scale_lr",
         type=str2bool,
         nargs="?",
-        const=False,
-        default=False,
+        const=True,
+        default=True,
         help="scale base-lr by ngpu * batch_size * n_accumulate",
     )
-
-    parser.add_argument(
-        "--datadir_in_name", 
-        type=str2bool, 
-        nargs="?", 
-        const=True, 
-        default=True, 
-        help="Prepend the final directory in the data_root to the output directory name")
-
-    parser.add_argument("--actual_resume", 
-        type=str,
-        required=True,
-        help="Path to model to actually resume from")
-
-    parser.add_argument("--data_root", 
-        type=str, 
-        required=True, 
-        help="Path to directory with training images")
-    
-    parser.add_argument("--reg_data_root", 
-        type=str, 
-        required=True, 
-        help="Path to directory with regularization images")
-
-    parser.add_argument("--embedding_manager_ckpt", 
-        type=str, 
-        default="", 
-        help="Initialize embedding manager from a checkpoint")
-
-    parser.add_argument("--class_word", 
-        type=str, 
-        default="dog",
-        help="Placeholder token which will be used to denote the concept in future prompts")
-
-    parser.add_argument("--init_word", 
-        type=str, 
-        help="Word to use as source for initial token embedding")
-
     return parser
 
 
@@ -215,28 +162,9 @@ def worker_init_fn(_):
     else:
         return np.random.seed(np.random.get_state()[1][0] + worker_id)
 
-class ConcatDataset(Dataset):
-    def __init__(self, *datasets):
-        self.datasets = datasets
-
-    def __getitem__(self, idx):
-        return tuple(d[idx] for d in self.datasets)
-
-    def __len__(self):
-        return min(len(d) for d in self.datasets)
-
-class FixedDataset(Dataset):
-  def __init__(self, dataset):
-    self.dataset = dataset
-  def __getitem__(self, idx):
-    ans = self.dataset[idx]
-    ans['image'] = np.array(ans['image'], dtype=np.float16)
-    return ans
-  def __len__(self):
-    return len(self.dataset)
 
 class DataModuleFromConfig(pl.LightningDataModule):
-    def __init__(self, batch_size, train=None, reg = None, validation=None, test=None, predict=None,
+    def __init__(self, batch_size, train=None, validation=None, test=None, predict=None,
                  wrap=False, num_workers=None, shuffle_test_loader=False, use_worker_init_fn=False,
                  shuffle_val_dataloader=False):
         super().__init__()
@@ -246,11 +174,7 @@ class DataModuleFromConfig(pl.LightningDataModule):
         self.use_worker_init_fn = use_worker_init_fn
         if train is not None:
             self.dataset_configs["train"] = train
-        if reg is not None:
-            self.dataset_configs["reg"] = reg
-        
-        self.train_dataloader = self._train_dataloader
-        
+            self.train_dataloader = self._train_dataloader
         if validation is not None:
             self.dataset_configs["validation"] = validation
             self.val_dataloader = partial(self._val_dataloader, shuffle=shuffle_val_dataloader)
@@ -273,8 +197,6 @@ class DataModuleFromConfig(pl.LightningDataModule):
         if self.wrap:
             for k in self.datasets:
                 self.datasets[k] = WrappedDataset(self.datasets[k])
-        for k in self.datasets:
-          self.datasets[k] = FixedDataset(self.datasets[k])
 
     def _train_dataloader(self):
         is_iterable_dataset = isinstance(self.datasets['train'], Txt2ImgIterableBaseDataset)
@@ -282,10 +204,7 @@ class DataModuleFromConfig(pl.LightningDataModule):
             init_fn = worker_init_fn
         else:
             init_fn = None
-        train_set = self.datasets["train"]
-        reg_set = self.datasets["reg"]
-        concat_dataset = ConcatDataset(train_set, reg_set)
-        return DataLoader(concat_dataset, batch_size=self.batch_size,
+        return DataLoader(self.datasets["train"], batch_size=self.batch_size,
                           num_workers=self.num_workers, shuffle=False if is_iterable_dataset else True,
                           worker_init_fn=init_fn)
 
@@ -413,7 +332,7 @@ class ImageLogger(Callback):
             grid = grid.transpose(0, 1).transpose(1, 2).squeeze(-1)
             grid = grid.numpy()
             grid = (grid * 255).astype(np.uint8)
-            filename = "{}_gs-{:06}_e-{:06}_b-{:06}.jpg".format(
+            filename = "{}_gs-{:06}_e-{:06}_b-{:06}.png".format(
                 k,
                 global_step,
                 current_epoch,
@@ -485,7 +404,7 @@ class CUDACallback(Callback):
         torch.cuda.synchronize(trainer.root_gpu)
         self.start_time = time.time()
 
-    def on_train_epoch_end(self, trainer, pl_module):
+    def on_train_epoch_end(self, trainer, pl_module, outputs):
         torch.cuda.synchronize(trainer.root_gpu)
         max_memory = torch.cuda.max_memory_allocated(trainer.root_gpu) / 2 ** 20
         epoch_time = time.time() - self.start_time
@@ -499,23 +418,7 @@ class CUDACallback(Callback):
         except AttributeError:
             pass
 
-class ModeSwapCallback(Callback):
 
-    def __init__(self, swap_step=2000):
-        super().__init__()
-        self.is_frozen = False
-        self.swap_step = swap_step
-
-    def on_train_epoch_start(self, trainer, pl_module):
-        if trainer.global_step < self.swap_step and not self.is_frozen:
-            self.is_frozen = True
-            trainer.optimizers = [pl_module.configure_opt_embedding()]
-
-        if trainer.global_step > self.swap_step and self.is_frozen:
-            self.is_frozen = False
-            trainer.optimizers = [pl_module.configure_opt_model()]
-
-from pytorch_lightning.strategies import DeepSpeedStrategy
 if __name__ == "__main__":
     # custom parser to specify config files, train, test and debug mode,
     # postfix, resume.
@@ -603,10 +506,6 @@ if __name__ == "__main__":
             name = "_" + cfg_name
         else:
             name = ""
-
-        if opt.datadir_in_name:
-            now = os.path.basename(os.path.normpath(opt.data_root)) + now
-            
         nowname = now + name + opt.postfix
         logdir = os.path.join(opt.logdir, nowname)
 
@@ -637,22 +536,7 @@ if __name__ == "__main__":
         lightning_config.trainer = trainer_config
 
         # model
-
-        # config.model.params.personalization_config.params.init_word = opt.init_word
-        # config.model.params.personalization_config.params.embedding_manager_ckpt = opt.embedding_manager_ckpt
-        # config.model.params.personalization_config.params.placeholder_tokens = opt.placeholder_tokens
-
-        # if opt.init_word:
-        #     config.model.params.personalization_config.params.initializer_words[0] = opt.init_word
-            
-        config.data.params.train.params.placeholder_token = opt.class_word
-        config.data.params.reg.params.placeholder_token = opt.class_word
-        config.data.params.validation.params.placeholder_token = opt.class_word
-
-        if opt.actual_resume:
-            model = load_model_from_config(config, opt.actual_resume)
-        else:
-            model = instantiate_from_config(config.model)
+        model = instantiate_from_config(config.model)
 
         # trainer and callbacks
         trainer_kwargs = dict()
@@ -698,12 +582,12 @@ if __name__ == "__main__":
         if hasattr(model, "monitor"):
             print(f"Monitoring {model.monitor} as checkpoint metric.")
             default_modelckpt_cfg["params"]["monitor"] = model.monitor
-            default_modelckpt_cfg["params"]["save_top_k"] = 1
+            default_modelckpt_cfg["params"]["save_top_k"] = 3
 
         if "modelcheckpoint" in lightning_config:
             modelckpt_cfg = lightning_config.modelcheckpoint
         else:
-            modelckpt_cfg =  OmegaConf.create()
+            modelckpt_cfg = OmegaConf.create()
         modelckpt_cfg = OmegaConf.merge(default_modelckpt_cfg, modelckpt_cfg)
         print(f"Merged modelckpt-cfg: \n{modelckpt_cfg}")
         if version.parse(pl.__version__) < version.parse('1.4.0'):
@@ -775,54 +659,23 @@ if __name__ == "__main__":
             del callbacks_cfg['ignore_keys_callback']
 
         trainer_kwargs["callbacks"] = [instantiate_from_config(callbacks_cfg[k]) for k in callbacks_cfg]
-        trainer_kwargs["max_steps"] = trainer_opt.max_steps
-        trainer_kwargs["precision"] = 16
-        #trainer_kwargs["strategy"]  = "deepspeed_stage_3_offload"
 
-        trainer_kwargs["strategy"]  = DeepSpeedStrategy(
-             stage=3,
-             offload_optimizer=True,
-             offload_parameters=True,
-             reduce_bucket_size=1,
-             allgather_bucket_size=1,
-             params_buffer_size=37945345,
-             max_in_cpu=1,
-             sub_group_size=1,
-             remote_device="nvme",
-             nvme_path = '/content',
-             partition_activations = True,
-             cpu_checkpointing = True,
-         )
-        trainer_kwargs["devices"]  = 1
-        
-        trainer_opt.accelerator = "gpu"
-        print(trainer_opt, trainer_kwargs)
-        
-        print('among')
         trainer = Trainer.from_argparse_args(trainer_opt, **trainer_kwargs)
-        print('us')
         trainer.logdir = logdir  ###
 
         # data
-        config.data.params.train.params.data_root = opt.data_root
-        config.data.params.reg.params.data_root = opt.reg_data_root
-        config.data.params.validation.params.data_root = opt.data_root
-        data = instantiate_from_config(config.data)
-
         data = instantiate_from_config(config.data)
         # NOTE according to https://pytorch-lightning.readthedocs.io/en/latest/datamodules.html
         # calling these ourselves should not be necessary but it is.
         # lightning still takes care of proper multiprocessing though
         data.prepare_data()
         data.setup()
-        print(data)
         print("#### Data #####")
         for k in data.datasets:
             print(f"{k}, {data.datasets[k].__class__.__name__}, {len(data.datasets[k])}")
 
         # configure learning rate
         bs, base_lr = config.data.params.batch_size, config.model.base_learning_rate
-        print(bs)
         if not cpu:
             ngpu = len(lightning_config.trainer.gpus.strip(",").split(','))
         else:
@@ -833,7 +686,6 @@ if __name__ == "__main__":
             accumulate_grad_batches = 1
         print(f"accumulate_grad_batches = {accumulate_grad_batches}")
         lightning_config.trainer.accumulate_grad_batches = accumulate_grad_batches
-        lightning_config.trainer.accumulate_grad_batches = 0
         if opt.scale_lr:
             model.learning_rate = accumulate_grad_batches * ngpu * bs * base_lr
             print(
@@ -868,9 +720,7 @@ if __name__ == "__main__":
         # run
         if opt.train:
             try:
-                print('among2')
                 trainer.fit(model, data)
-                print('us2')
             except Exception:
                 melk()
                 raise

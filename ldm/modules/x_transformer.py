@@ -1,11 +1,11 @@
 """shout-out to https://github.com/lucidrains/x-transformers/tree/main/x_transformers"""
 import torch
-from torch import nn, einsum
 import torch.nn.functional as F
-from functools import partial
-from inspect import isfunction
 from collections import namedtuple
 from einops import rearrange, repeat, reduce
+from functools import partial
+from inspect import isfunction
+from torch import nn, einsum
 
 # constants
 
@@ -39,7 +39,7 @@ class AbsolutePositionalEmbedding(nn.Module):
 class FixedPositionalEmbedding(nn.Module):
     def __init__(self, dim):
         super().__init__()
-        inv_freq = 1. / (10000 ** (torch.arange(0, dim, 2).float().half() / dim))
+        inv_freq = 1. / (10000 ** (torch.arange(0, dim, 2).float() / dim))
         self.register_buffer('inv_freq', inv_freq)
 
     def forward(self, x, seq_dim=1, offset=0):
@@ -64,18 +64,21 @@ def default(val, d):
 def always(val):
     def inner(*args, **kwargs):
         return val
+
     return inner
 
 
 def not_equals(val):
     def inner(x):
         return x != val
+
     return inner
 
 
 def equals(val):
     def inner(x):
         return x == val
+
     return inner
 
 
@@ -252,7 +255,7 @@ class Attention(nn.Module):
         self.sparse_topk = sparse_topk
 
         # entmax
-        #self.attn_fn = entmax15 if use_entmax15 else F.softmax
+        # self.attn_fn = entmax15 if use_entmax15 else F.softmax
         self.attn_fn = F.softmax
 
         # add memory key / values
@@ -485,8 +488,7 @@ class AttentionLayers(nn.Module):
             mask=None,
             context_mask=None,
             mems=None,
-            return_hiddens=False,
-            **kwargs
+            return_hiddens=False
     ):
         hiddens = []
         intermediates = []
@@ -545,7 +547,6 @@ class Encoder(AttentionLayers):
         super().__init__(causal=False, **kwargs)
 
 
-
 class TransformerWrapper(nn.Module):
     def __init__(
             self,
@@ -572,7 +573,7 @@ class TransformerWrapper(nn.Module):
 
         self.token_emb = nn.Embedding(num_tokens, emb_dim)
         self.pos_emb = AbsolutePositionalEmbedding(emb_dim, max_seq_len) if (
-                    use_pos_emb and not attn_layers.has_pos_emb) else always(0)
+                use_pos_emb and not attn_layers.has_pos_emb) else always(0)
         self.emb_dropout = nn.Dropout(emb_dropout)
 
         self.project_emb = nn.Linear(emb_dim, dim) if emb_dim != dim else nn.Identity()
@@ -604,19 +605,11 @@ class TransformerWrapper(nn.Module):
             return_mems=False,
             return_attn=False,
             mems=None,
-            embedding_manager=None,
             **kwargs
     ):
         b, n, device, num_mem = *x.shape, x.device, self.num_memory_tokens
-
-        embedded_x = self.token_emb(x)
-        
-        if embedding_manager:
-            x = embedding_manager(x, embedded_x)
-        else:
-            x = embedded_x
-
-        x = x + self.pos_emb(x)
+        x = self.token_emb(x)
+        x += self.pos_emb(x)
         x = self.emb_dropout(x)
 
         x = self.project_emb(x)
@@ -647,4 +640,3 @@ class TransformerWrapper(nn.Module):
             return out, attn_maps
 
         return out
-

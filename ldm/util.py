@@ -1,16 +1,12 @@
 import importlib
-
-import torch
-import numpy as np
-from collections import abc
-from einops import rearrange
-from functools import partial
-
 import multiprocessing as mp
-from threading import Thread
-from queue import Queue
-
+from collections import abc
 from inspect import isfunction
+from queue import Queue
+from threading import Thread
+
+import numpy as np
+import torch
 from PIL import Image, ImageDraw, ImageFont
 
 
@@ -75,21 +71,18 @@ def count_params(model, verbose=False):
     return total_params
 
 
-def instantiate_from_config(config, **kwargs):
+def instantiate_from_config(config):
     if not "target" in config:
         if config == '__is_first_stage__':
             return None
         elif config == "__is_unconditional__":
             return None
         raise KeyError("Expected key `target` to instantiate.")
-    try:
-      return get_obj_from_str(config["target"])(**config.get("params", dict()), **kwargs).half()
-    except:
-      return get_obj_from_str(config["target"])(**config.get("params", dict()), **kwargs)
+    return get_obj_from_str(config["target"])(**config.get("params", dict()))
+
 
 def get_obj_from_str(string, reload=False):
     module, cls = string.rsplit(".", 1)
-    print('abc')
     if reload:
         module_imp = importlib.import_module(module)
         importlib.reload(module_imp)

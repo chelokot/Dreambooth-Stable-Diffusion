@@ -1,83 +1,215 @@
-# Dreambooth on Stable Diffusion
+# Update: v1.0.1 superfast mode edition
 
-This is an implementtaion of Google's [Dreambooth](https://arxiv.org/abs/2208.12242) with [Stable Diffusion](https://github.com/CompVis/stable-diffusion). The original Dreambooth is based on [Imagen](https://imagen.research.google/) text-to-image model. However, neither the model nor the pre-trained weights of Imagen is available. To enable people to fine-tune a text-to-image model with a few examples, I implemented the idea of Dreambooth on Stable diffusion.
+## THE GUI IS OUT <br>
+See [GUI Usage tutorial for dummies](GUI_TUTORIAL.md)
 
-This code repository is based on that of [Textual Inversion](https://github.com/rinongal/textual_inversion). Note that Textual Inversion only optimizes word ebedding, while dreambooth fine-tunes the whole diffusion model.
+## The hlky's webui version [is out](https://github.com/neonsecret/stable-diffusion-webui)
 
-The implementation makes minimum changes over the official codebase of Textual Inversion. In fact, due to lazyness, some components in Textual Inversion, such as the embedding manager, are not deleted, although they will never be used here.
+<br>
+This repo can generate:
+1920x1088 and 1792x1792 without superfastmode and 960x960 with it. (on 8 gb vram)<br>
+1024x1024 without superfastmode and 768x768 with it. (on 4 gb vram)<br>
 
-## Usage
+### How to generate so high-res images?
+The superfast mode is enabled by default, however if you encounter OOM errors or want to go higher in resolution, disable it:
 
-### Preparation
-To fine-tune a stable diffusion model, you need to obtain the pre-trained stable diffusion models following their [instructions](https://github.com/CompVis/stable-diffusion#stable-diffusion-v1). Weights can be downloaded on [HuggingFace](https://huggingface.co/CompVis). You can decide which version of checkpoint to use, but I use ```sd-v1-4-full-ema.ckpt```.
-
-We also need to create a set of images for regularization, as the fine-tuning algorithm of Dreambooth requires that. Details of the algorithm can be found in the paper. Note that in the original paper, the regularization images seem to be generated on-the-fly. However, here I generated a set of regularization images before the training. The text prompt for generating regularization images can be ```photo of a <class>```, where ```<class>``` is a word that describes the class of your object, such as ```dog```. The command is
-
+Example cli command with txt2img and high-res mode:
 ```
-python scripts/stable_txt2img.py --ddim_eta 0.0 --n_samples 8 --n_iter 1 --scale 10.0 --ddim_steps 50  --ckpt /path/to/original/stable-diffusion/sd-v1-4-full-ema.ckpt --prompt "a photo of a <class>" 
+python optimizedSD/optimized_txt2img.py --prompt "an apple" --config_path optimizedSD/v1-inference_lowvram.yaml --H 512 --W 512 --seed 27 --n_iter 2 --n_samples 10 --ddim_steps 50
 ```
-
-I generate 8 images for regularization, but more regularization images may lead to stronger regularization and better editability. After that, save the generated images (separately, one image per ```.png``` file) at ```/root/to/regularization/images```.
-
-### Training
-Training can be done by running the following command
-
+Example gradio command with txt2img and high-res mode:
 ```
-python main.py --base configs/stable-diffusion/v1-finetune_unfrozen.yaml 
-                -t 
-                --actual_resume /path/to/original/stable-diffusion/sd-v1-4-full-ema.ckpt  
-                -n <job name> 
-                --gpus 0, 
-                --data_root /root/to/training/images 
-                --reg_data_root /root/to/regularization/images 
-                --class_word <xxx>
+python optimizedSD/txt2img_gradio.py --config_path optimizedSD/v1-inference_lowvram.yaml
 ```
+the `--config_path optimizedSD/v1-inference_lowvram.yaml` argument enables a low-vram mode which allows to generate bigger-resolution images at the slight cost of the speed.
 
-Detailed configuration can be found in ```configs/stable-diffusion/v1-finetune_unfrozen.yaml```. In particular, the default learning rate is ```1.0e-6``` as I found the ```1.0e-5``` in the Dreambooth paper leads to poor editability. The parameter ```reg_weight``` corresponds to the weight of regularization in the Dreambooth paper, and the default is set to ```1.0```.
+On rtx 3070, generation of 1920x1088 image took 9 minutes sharp, 512x512 30 seconds.
 
-Dreambooth requires a placeholder word ```[V]```, called identifier, as in the paper. This identifier needs to be a relatively rare tokens in the vocabulary. The original paper approaches this by using a rare word in T5-XXL tokenizer. For simplicity, here I just use a random word ```sks``` and hard coded it.. If you want to change that, simply make a change in [this file](https://github.com/XavierXiao/Dreambooth-Stable-Diffusion/blob/main/ldm/data/personalized.py#L10).
+<h1 align="center">Optimized Stable Diffusion</h1>
+<p align="center">
+    <img src="https://img.shields.io/github/last-commit/neonsecret/stable-diffusion?logo=Python&logoColor=green&style=for-the-badge"/>
+        <img src="https://img.shields.io/github/issues/neonsecret/stable-diffusion?logo=GitHub&style=for-the-badge"/>
+                <img src="https://img.shields.io/github/stars/neonsecret/stable-diffusion?logo=GitHub&style=for-the-badge"/>
+    <a href="https://colab.research.google.com/github/neonsecret/stable-diffusion/blob/main/optimized_colab.ipynb">
+      <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
+    </a>
+</p>
 
-Training will be run for 800 steps, and two checkpoints will be saved at ```./logs/<job_name>/checkpoints```, one at 500 steps and one at final step. Typically the one at 500 steps works well enough. I train the model use two A6000 GPUs and it takes ~15 mins.
+This repo is a modified version of the Stable Diffusion repo, optimized to use less VRAM than the original by
+sacrificing inference speed.
 
-### Generation
-After training, personalized samples can be obtained by running the command
+To achieve this, the stable diffusion model is fragmented into four parts which are sent to the GPU only when needed.
+After the calculation is done, they are moved back to the CPU. This allows us to run a bigger model while requiring less
+VRAM.
 
-```
-python scripts/stable_txt2img.py --ddim_eta 0.0 
-                                 --n_samples 8 
-                                 --n_iter 1 
-                                 --scale 10.0 
-                                 --ddim_steps 100  
-                                 --ckpt /path/to/saved/checkpoint/from/training
-                                 --prompt "photo of a sks <class>" 
-```
+<h1 align="center">Installation</h1>
 
-In particular, ```sks``` is the identifier, which should be replaced by your choice if you happen to change the identifier, and ```<class>``` is the class word ```--class_word``` for training.
 
-## Results
-Here I show some qualitative results. The training images are obtained from the [issue](https://github.com/rinongal/textual_inversion/issues/8) in the Textual Inversion repository, and they are 3 images of a large trash container. Regularization images are generated by prompt ```photo of a container```. Regularization images are shown here:
+You can clone this repo and follow the same installation steps as the original (mainly creating the conda environment and
+placing the weights at the specified location). <br>
+So run: <br>
+`conda env create -f environment.yaml` <br>
+`conda activate ldm`
 
-![](assets/a-container-0038.jpg)
+<h2 align="center">Additional steps for AMD Cards</h2>
 
-After training, generated images with prompt ```photo of a sks container```:
+After activating your conda environment, you have to update torch and torchvision wheels which were built with ROCm support:
 
-![](assets/photo-of-a-sks-container-0018.jpg)
+`pip3 install --upgrade torch torchvision --extra-index-url https://download.pytorch.org/whl/rocm5.1.1`
 
-Generated images with prompt ```photo of a sks container on the beach```:
+<h2 align="center">Docker</h2>
 
-![](assets/photo-of-a-sks-container-on-the-beach-0017.jpg)
+Alternatively, if you prefer to use Docker, you can do the following:
 
-Generated images with prompt ```photo of a sks container on the moon```:
+1. Install [Docker](https://docs.docker.com/engine/install/)
+   , [Docker Compose plugin](https://docs.docker.com/compose/install/),
+   and [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html#docker)
+2. Clone this repo to, e.g., `~/stable-diffusion`
+3. Put your downloaded `model.ckpt` file into `~/sd-data` (it's a relative path, you can change it
+   in `docker-compose.yml`)
+4. `cd` into `~/stable-diffusion` and execute `docker compose up --build`
 
-![](assets/photo-of-a-sks-container-on-the-moon-0016.jpg)
+This will launch gradio on port 7860 with txt2img. You can also use `docker compose run` to execute other Python
+scripts.
 
-Some not-so-perfect but still interesting results:
+<h1 align="center">Usage</h1>
 
-Generated images with prompt ```photo of a red sks container```:
+## img2img
 
-![](assets/a-red-sks-container-0021.jpg)
+- `img2img` can generate _512x512 images from a prior image and prompt on a 4GB VRAM GPU in under 20 seconds per image_
+  on an RTX 2060.
 
-Generated images with prompt ```a dog on top of sks container```:
+- The maximum size that can fit on 6GB GPU (RTX 2060) is around 576x768.
 
-![](assets/a-dog-on-top-of-sks-container-0023.jpg)
+- For example, the following command will generate 20 512x512 images:
 
+`python optimizedSD/optimized_img2img.py --prompt "Austrian alps" --init-img ~/sketch-mountains-input.jpg --strength 0.8 --n_iter 2 --n_samples 10 --H 512 --W 512`
+
+## txt2img
+
+- `txt2img` can generate _512x512 images from a prompt on a 4GB VRAM GPU in under 25 seconds per image_ on an RTX 2060.
+
+- For example, the following command will generate 20 512x512 images:
+
+`python optimizedSD/optimized_txt2img.py --prompt "Cyberpunk style image of a Telsa car reflection in rain" --H 512 --W 512 --seed 27 --n_iter 2 --n_samples 10 --ddim_steps 50`
+
+## inpainting
+
+- `inpaint_gradio.py` can fill masked parts of an image based on a given prompt. It can inpaint 512x512 images while
+  using under 4GB of VRAM.
+
+- To launch the gradio interface for inpainting, run `python optimizedSD/inpaint_gradio.py`. The mask for the image can
+  be drawn on the selected image using the brush tool.
+
+- The results are not yet perfect but can be improved by using a combination of prompt weighting, prompt engineering and
+  testing out multiple values of the `--strength` argument.
+
+- _Suggestions to improve the inpainting algorithm are most welcome_.
+
+## img2img interpolation
+
+- `img2img_interpolate.py` creates an animation of image transformation using a text prompt
+
+- To launch the gradio interface for inpainting, run `python optimizedSD/img2img_interpolate.py`. The mask for the image can
+  be drawn on the selected image using the brush tool.
+
+- The results are not yet perfect but can be improved by using a combination of prompt weighting, prompt engineering and
+  testing out multiple values of the `--strength` argument.
+
+
+<h1 align="center">Using the Gradio GUI</h1>
+
+- You can also use the built-in gradio interface for `img2img`, `txt2img` & `inpainting` instead of the command line
+  interface. Activate the conda environment and install the latest version of gradio using `pip install gradio`,
+
+- Run img2img using `python optimizedSD/img2img_gradio.py`, txt2img using `python optimizedSD/txt2img_gradio.py` and
+  inpainting using `python optimizedSD/inpaint_gradio.py`.
+
+- img2img_gradio.py has a feature to crop input images. Look for the pen symbol in the image box after selecting the
+  image.
+
+<h1 align="center">Arguments</h1>
+
+## `--seed`
+
+**Seed for image generation**, can be used to reproduce previously generated images. Defaults to a random seed if
+unspecified.
+
+- The code will give the seed number along with each generated image. To generate the same image again, just specify the
+  seed using `--seed` argument. Images are saved with its seed number as its name by default.
+
+- For example if the seed number for an image is `1234` and it's the 55th image in the folder, the image name will be
+  named `seed_1234_00055.png`.
+
+## `--n_samples`
+
+**Batch size/amount of images to generate at once.**
+
+- To get the lowest inference time per image, use the maximum batch size `--n_samples` that can fit on the GPU.
+  Inference time per image will reduce on increasing the batch size, but the required VRAM will increase.
+
+- If you get a CUDA out of memory error, try reducing the batch size `--n_samples`. If it doesn't work, the other option
+  is to reduce the image width `--W` or height `--H` or both.
+
+## `--n_iter`
+
+**Run _x_ amount of times**
+
+- Equivalent to running the script n_iter number of times. Only difference is that the model is loaded only once per
+  n_iter iterations. Unlike `n_samples`, reducing it doesn't have an effect on VRAM required or inference time.
+
+## `--H` & `--W`
+
+**Height & width of the generated image.**
+
+- Both height and width should be a multiple of 64.
+
+## `--turbo`
+
+**Increases inference speed at the cost of extra VRAM usage.**
+
+- Using this argument increases the inference speed by using around 1GB of extra GPU VRAM. It is especially effective
+  when generating a small batch of images (~ 1 to 4) images. It takes under 25 seconds for txt2img and 15 seconds for
+  img2img (on an RTX 2060, excluding the time to load the model). Use it on larger batch sizes if GPU VRAM available.
+
+## `--precision autocast` or `--precision full`
+
+**Whether to use `full` or `mixed` precision**
+
+- Mixed Precision is enabled by default. If you don't have a GPU with tensor cores (any GTX 10 series card), you may not
+  be able use mixed precision. Use the `--precision full` argument to disable it.
+
+## `--format png` or `--format jpg`
+
+**Output image format**
+
+- The default output format is `png`. While `png` is lossless, it takes up a lot of space (unless large portions of the
+  image happen to be a single colour). Use lossy `jpg` to get smaller image file sizes.
+
+## `--unet_bs`
+
+**Batch size for the unet model**
+
+- Takes up a lot of extra RAM for **very little improvement** in inference time. `unet_bs` > 1 is not recommended!
+
+- Should generally be a multiple of 2x(n_samples)
+
+<h1 align="center">Weighted Prompts</h1>
+
+- Prompts can also be weighted to put relative emphasis on certain words.
+  eg. `--prompt tabby cat:0.25 white duck:0.75 hybrid`.
+
+- The number followed by the colon represents the weight given to the words before the colon. The weights can be both
+  fractions or integers.
+
+## Changelog
+
+- v0.8: Added gradio interface for inpainting.
+- v0.7: Added support for logging, jpg file format
+- v0.6: Added support for using weighted prompts. (based on
+  @lstein's [repo](https://github.com/lstein/stable-diffusion))
+- v0.5: Added support for using gradio interface.
+- v0.4: Added support for specifying image seed.
+- v0.3: Added support for using mixed precision.
+- v0.2: Added support for generating images in batches.
+- v0.1: Split the model into multiple parts to run it on lower VRAM.

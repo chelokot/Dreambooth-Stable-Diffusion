@@ -1,14 +1,14 @@
 import os
-import torch
 import pytorch_lightning as pl
-from omegaconf import OmegaConf
-from torch.nn import functional as F
-from torch.optim import AdamW
-from torch.optim.lr_scheduler import LambdaLR
+import torch
 from copy import deepcopy
 from einops import rearrange
 from glob import glob
 from natsort import natsorted
+from omegaconf import OmegaConf
+from torch.nn import functional as F
+from torch.optim import AdamW
+from torch.optim.lr_scheduler import LambdaLR
 
 from ldm.modules.diffusionmodules.openaimodel import EncoderUNetModel, UNetModel
 from ldm.util import log_txt_as_img, default, ismap, instantiate_from_config
@@ -126,7 +126,7 @@ class NoisyLatentImageClassifier(pl.LightningModule):
         if len(x.shape) == 3:
             x = x[..., None]
         x = rearrange(x, 'b h w c -> b c h w')
-        x = x.to(memory_format=torch.contiguous_format).float().half()
+        x = x.to(memory_format=torch.contiguous_format).float()
         return x
 
     @torch.no_grad()
@@ -150,9 +150,9 @@ class NoisyLatentImageClassifier(pl.LightningModule):
     def compute_top_k(self, logits, labels, k, reduction="mean"):
         _, top_ks = torch.topk(logits, k, dim=1)
         if reduction == "mean":
-            return (top_ks == labels[:, None]).float().sum(dim=-1).mean().item().half()
+            return (top_ks == labels[:, None]).float().sum(dim=-1).mean().item()
         elif reduction == "none":
-            return (top_ks == labels[:, None]).float().sum(dim=-1)v
+            return (top_ks == labels[:, None]).float().sum(dim=-1)
 
     def on_train_epoch_start(self):
         # save some memory
